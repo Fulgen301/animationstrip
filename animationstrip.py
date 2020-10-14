@@ -35,7 +35,6 @@ def process(file : str, output : str, overwrite : bool = False):
 
     with open(output, "wb" if overwrite else "xb") as fobj:
         writer.write(fobj)
-        
 
 if __name__ == "__main__":
     import argparse
