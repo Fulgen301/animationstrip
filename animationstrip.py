@@ -19,12 +19,28 @@ import os
 import sys
 from PyPDF2 import PdfFileReader, PdfFileWriter
 
+class CorruptedPDFError(RuntimeError):
+    pass
+
+class MissingPageLabelsError(KeyError):
+    pass
+
 def process(file : str, output : str, overwrite : bool = False):
     reader = PdfFileReader(file)
     writer = PdfFileWriter()
     last = -1
 
-    for number in reader.trailer["/Root"]["/PageLabels"]["/Nums"][2::2]:
+    try:
+        root = reader.trailer["/Root"]
+    except KeyError as e:
+        raise CorruptedPDFError(e.args[0]) from e
+
+    try:
+        pageLabels = root["/PageLabels"]
+    except KeyError as e:
+        raise MissingPageLabelsError(e.args[0]) from e
+
+    for number in pageLabels["/Nums"][2::2]:
         last = number
         writer.addPage(reader.pages[number - 1])
 
@@ -38,13 +54,14 @@ def process(file : str, output : str, overwrite : bool = False):
 
 if __name__ == "__main__":
     import argparse
-    from errno import EEXIST, ENOENT
+    from errno import EEXIST, ENOENT, EINVAL
     
     parser = argparse.ArgumentParser(description="Strips LaTeX beamer animations from PDFs, leaving only the last slide per group.")
     parser.add_argument("input", help="input file")
     parser.add_argument("output", help="output file. if not specified, the input file gets overwritten", nargs="?")
     parser.add_argument("-f", help="overwrite existing output files", action="store_true", dest="overwrite")
     parser.add_argument("-v", help="verbose output", action="store_const", dest="log", const=lambda *args, **kwargs: print(*args, **kwargs), default=lambda *args, **kwargs: None)
+    parser.add_argument("-q", help="do not output error messages to stderr", action="store_const", dest="error", const=lambda *args, **kwargs: None, default=lambda *args, **kwargs: print("Error:", *args, **kwargs, file=sys.stderr))
 
     result = parser.parse_args()
     outputFile = result.output or result.input
@@ -52,13 +69,20 @@ if __name__ == "__main__":
     try:
         process(result.input, outputFile, result.overwrite or not result.output)
     except FileNotFoundError as e:
-        result.log("Error:", result.input, "not found!", file=sys.stderr)
+        result.error(result.input, "not found!")
         sys.exit(ENOENT)
     except FileExistsError:
-        result.log("Error:", outputFile, "already exists!", file=sys.stderr)
+        result.error(outputFile, "already exists!")
         sys.exit(EEXIST)
     except OSError as e:
-        result.log(e.strerror)
+        result.error(e.strerror)
         sys.exit(e.errno)
+    
+    except CorruptedPDFError as e:
+        result.error("The input PDF is corrupted. Missing key:", e.args[0])
+        sys.exit(EINVAL)
+    except MissingPageLabelsError:
+        result.error("The input PDF does not contain page labels. This usually means that there are no dedicated page numbers.")
+        sys.exit(EINVAL)
 
     sys.exit(0)
